@@ -51,7 +51,7 @@ def evolution_webhook(data: dict): # Quitamos el 'async'
         
         result_flow = json.loads(result.raw) if 'raw' in result else result
         print(f"RESULTADO DEL result_flow: {result}")
-        #enviar_a_whatsapp(instance=instance_name, client_name=clinic['name'], number=sender_phone, text=result_flow)
+        enviar_a_whatsapp(instance=instance_name, client_name=clinic['name'], number=sender_phone, text=result_flow)
 
         return {"status": "success", "result": result_flow}
     except Exception as e:
