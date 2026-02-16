@@ -9,6 +9,7 @@ ENV SUPABASE_URL=http://supabase.url
 ENV SUPABASE_KEY=supabasekey
 ENV EVOLUTION_API_URL=evolutionapi
 ENV REDIS_URL=http://redis.url
+ENV OPENAI_API_KEY=testkey
 
 # Directorio de trabajo
 WORKDIR /app
