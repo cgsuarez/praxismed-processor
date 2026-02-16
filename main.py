@@ -28,14 +28,14 @@ def evolution_webhook(data: dict): # Quitamos el 'async'
     print(f"Webhook recibido: {data}")
 
     try:
-        instance_number = data.get('instanceNumber')        
+        instance_name = data.get('instance')        
         incoming_msg = data.get('data', {}).get('message', {}).get('conversation')
         remote_jid = data.get('data').get('key', {}).get('remoteJid', '')
         sender_phone = remote_jid.split('@')[0]
         print(f"Mensaje: {incoming_msg}")
         print(f"sender_phone: {sender_phone}")
 
-        clinic = repo.get_clinic_by_phone(instance_number)
+        clinic = repo.get_clinic_by_name(instance_name)
         if not clinic:
                 return {"status": "ignored", "reason": "clinic_not_found"}
             

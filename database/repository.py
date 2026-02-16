@@ -8,14 +8,14 @@ class MedicalRepository:
         print(f"medical repository: {url}")
         self.supabase: Client = create_client(url, key)
 
-    def get_clinic_by_phone(self, instance_phone: str):
+    def get_clinic_by_name(self, instance: str):
         """
         Busca a qué clínica pertenece el número de WhatsApp de la instancia.
         Asumimos que el número de la instancia está registrado en la tabla 'clinics'.
         """
         response = self.supabase.table("clinics") \
             .select("id, name, timezone") \
-            .eq("phone", instance_phone) \
+            .eq("name", instance) \
             .single() \
             .execute()
         return response.data
