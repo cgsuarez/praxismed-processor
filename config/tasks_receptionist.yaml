@@ -1,0 +1,49 @@
+#capture_patient_data_task:
+#  description: >
+#    Interactúa con el paciente para obtener su nombre completo y correo electrónico. 
+#    Explica que es necesario para completar su registro en el sistema.
+#    Teléfono actual del paciente: {patient_phone}.
+#    Tu objetivo es registrar a un nuevo paciente. 
+#    1. Saluda al usuario.
+#    2. Pregunta su nombre completo, teléfono y correo electrónico.
+#    3. Si el usuario no proporciona un dato, PÍDELO. NO inventes datos.
+#    4. Usa la capacidad de 'human_input' para obtener estas respuestas.
+#  expected_output: >
+#    Un objeto JSON con las claves: 'full_name' y 'email'. 
+#    Si el paciente aún no proporciona los datos, el output debe indicar qué falta, 
+#    Debe retornarse un JSON con el campo 'missing_fields'.
+
+tarea_triaje_y_recepcion:
+  description: >
+    Pedir al paciente {patient_name} que describa sus síntomas o motivo de consulta.
+    Identificar:  1. Motivo de consulta, 2. Nivel de urgencia.
+    Si es una emergencia, dar instrucciones de seguridad. Si es una cita normal, 
+    preparar el resumen para el coordinador.
+  expected_output: >
+    Un objecto JSON con nombre, motivo, especialidad requerida y nivel de urgencia.
+  agent: receptionist_agent
+
+tarea_encontrar_agenda_doctor:
+  description: >
+    Basado en el resumen de la tarea anterior
+    1. En base al nombre del doctor usa 'buscar_doctor_por_nombre_o_especialidad', pasando como
+    parametro el identificaodr de la clinica (NUNCA el nombre)
+    2. Una vez que encuentres el Id del doctor correcto usa 'consultar_agenda_doctor' pasando como parametro
+    el identificador del doctor   
+  expected_output: >
+    Un objecto JSON estrictamente formateado con el doctor_id (basado en el id del doctor),
+    doctor_name con el nombre del doctor, y un objeto llamado agenda_disponible con la agenda
+    disponible del doctor o un mensaje indicando que no hay cupos cercanos.
+  agent: receptionist_agent
+
+tarea_gestion_agenda:
+  description: >
+    Basado en el resumen de la tarea anterior, buscar disponibilidad en el calendario 
+    para la especialidad requerida, tomar en cuenta que las citas del Doctor deben estar con una fecha futura,
+    es decir el dia tiene que ser al menos el dia de HOY, NUNCA UNA FECHA PASADA. Optimizar el tiempo del doctor.
+  expected_output: >    
+    Un JSON estrictamente formateado con doctor_id (el doctor_id es una cadena la misma que debe 
+    respetar el formato), patient_id (asi mismo es una cadena y se debe respetar el formato), date y un summary con 
+    la mejor opción de horario disponible (Fecha y Hora) o un mensaje indicando que no 
+    hay cupos cercanos.
+  agent: coordinador_agenda

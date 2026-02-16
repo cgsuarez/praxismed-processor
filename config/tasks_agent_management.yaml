@@ -1,0 +1,17 @@
+tarea_gestion_agenda:
+  description: >
+    Basado en el resumen de la tarea anterior, buscar disponibilidad en el calendario 
+    para la especialidad requerida. Optimizar el tiempo del doctor.
+  expected_output: >
+    La mejor opción de horario disponible (Fecha y Hora) o un mensaje indicando que no 
+    hay cupos cercanos.
+  agent: coordinador_agenda
+#
+#tarea_confirmacion_y_seguimiento:
+#  description: >
+#    Generar el mensaje final de WhatsApp para el paciente con la propuesta de cita. 
+#    Incluir instrucciones de llegada y un recordatorio de que debe confirmar.
+#  expected_output: >
+#    El texto exacto del mensaje de WhatsApp que se enviará al paciente, redactado de 
+#    forma profesional y cálida.
+#  agent: seguimiento_calidad

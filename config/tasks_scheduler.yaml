@@ -1,0 +1,18 @@
+task_registrar_cita_final:
+  description: >
+    Recibes una solicitud de agendamiento con los siguientes datos:
+    - ID de la clinica: {clinic_id}
+    - ID del Doctor: {doctor_id}
+    - ID del Paciente: {patient_id}
+    - Fecha y Hora seleccionada: {date}
+    - Resumen de la selección: {summary}
+
+    Tu deber es:
+    1. Verificar que los IDs sean números válidos.
+    2. Ejecutar la herramienta 'confirmar_y_agendar_cita' usando exactamente estos datos.
+    3. Si la herramienta responde exitosamente, confirma al paciente que su cita está lista.
+    4. Si hay un error (ej. horario ocupado), infórmalo basándote en el 'summary'.
+  expected_output: >
+    Un mensaje final de confirmación para el usuario con los detalles de su cita 
+    o un mensaje de error claro si no se pudo completar el registro.
+  #agent: scheduling_agent

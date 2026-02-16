@@ -1,0 +1,13 @@
+.venv
+.env
+trained_agents_data.pkl
+docker-evolution/postgres_data
+
+# Snyk Security Extension - AI Rules (auto-generated)
+.github/instructions/snyk_rules.instructions.md
+.env
+**/postgres_data
+**/evolution_instances
+__pycache__
+docker-evolution
+trained_agents_data.pkl
