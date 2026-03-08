@@ -65,7 +65,7 @@ def evolution_webhook(data: dict): # Quitamos el 'async'
             result_flow = {"message": str(result)}
 
         print(f"RESULTADO DEL result_flow: {result_flow}")
-        enviar_a_whatsapp(instance=instance_name, client_name=clinic['name'], number=sender_phone, text=result_flow)
+        enviar_a_whatsapp(instance=instance_name, client_name=clinic['name'], number=sender_phone, text=result_flow.response_message)
 
         # Extraer campos de primer nivel para que el consumidor no tenga que parsear result
         message = result_flow.get("message") if isinstance(result_flow, dict) else str(result_flow)
