@@ -185,9 +185,7 @@ def enviar_a_whatsapp(instance, client_name, number, text):
             "delay": 1200,
             "presence": "composing"
         },
-        "textMessage": {
-            "text": str(text) # <-- Aquí es donde debe ir el texto ahora
-        }
+        "text": str(text) # <-- Aquí es donde debe ir el texto ahora        
     }
     
     try:
