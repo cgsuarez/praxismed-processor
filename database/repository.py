@@ -1,4 +1,5 @@
 from supabase import create_client, Client
+from datetime import datetime, timedelta, timezone
 import os
 
 class MedicalRepository:
@@ -58,17 +59,20 @@ class MedicalRepository:
     # --- CRUD AGENDAMIENTOS ---
     def create_appointment(self, clinic_id: str, patient_id: str, doctor_id: str, date: str, start_time: str):
         """Inserta en la tabla 'appointments' respetando los tipos de datos."""
+        start_dt = datetime.strptime(start_time, "%H:%M")
+        end_time = (start_dt + timedelta(minutes=30)).strftime("%H:%M")
+
         data = {
             "clinic_id": clinic_id,
             "patient_id": patient_id,
             "doctor_id": doctor_id,
             "appointment_date": date,
             "start_time": start_time,
-            "end_time": start_time, # Deberías calcular el fin según la duración
+            "end_time": end_time,
             "status": "confirmed"
         }
         response = self.supabase.table("appointments").insert(data).execute()
-        return response.data[0]    
+        return response.data[0]
         
     # --- DOCTORES Y AGENDA ---
     def search_doctors(self, clinic_id: str, query: str):
@@ -82,20 +86,18 @@ class MedicalRepository:
         return response.data
 
     def get_doctor_schedule(self, doctor_id: str):
-        """Obtiene el JSONB de la columna 'schedule' de la tabla doctors."""
+        """Obtiene el JSONB de la columna 'schedule' de la tabla doctors como dict."""
         print(f"get_doctor_schedule: {doctor_id}")
         response = self.supabase.table("doctors") \
             .select("schedule") \
             .eq("id", doctor_id) \
             .single() \
             .execute()
-        
+
         if not response.data or not response.data.get("schedule"):
-            return "No hay horarios configurados."
-        
-        # Como tu esquema usa JSONB para 'schedule', lo procesamos directamente
-        sched = response.data["schedule"]
-        return f"Horarios disponibles: {sched}"
+            return None
+
+        return response.data["schedule"]
         
     def get_clinic_details(self, clinic_id: str):
         """
@@ -114,6 +116,93 @@ class MedicalRepository:
             return "Detalles de clínica no encontrados."
             
         return response.data
+
+    def get_confirmed_appointment(self, clinic_id: str, patient_id: str):
+        """Returns the most recent confirmed appointment for a patient in a clinic."""
+        response = self.supabase.table("appointments") \
+            .select("id, appointment_date, start_time, end_time, doctors(name, specialties(name))") \
+            .eq("clinic_id", clinic_id) \
+            .eq("patient_id", patient_id) \
+            .eq("status", "confirmed") \
+            .order("appointment_date", desc=False) \
+            .limit(1) \
+            .execute()
+        return response.data[0] if response.data else None
+
+    def cancel_appointment(self, appointment_id: str):
+        """Sets the appointment status to 'cancelled'."""
+        response = self.supabase.table("appointments") \
+            .update({"status": "cancelled"}) \
+            .eq("id", appointment_id) \
+            .execute()
+        return response.data[0] if response.data else None
+
+    # --- CONVERSACIONES Y MENSAJES ---
+
+    def get_or_create_conversation(self, clinic_id: str, patient_id: str) -> dict:
+        """Returns the active conversation for a patient in a clinic, creating one if it doesn't exist."""
+        response = self.supabase.table("conversations") \
+            .select("*") \
+            .eq("clinic_id", clinic_id) \
+            .eq("patient_id", patient_id) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+
+        if response.data:
+            return response.data[0]
+
+        now = datetime.now(timezone.utc).isoformat()
+        new_conv = self.supabase.table("conversations").insert({
+            "clinic_id": clinic_id,
+            "patient_id": patient_id,
+            "last_message": None,
+            "last_message_time": None,
+            "unread_count": 0,
+            "created_at": now,
+            "updated_at": now,
+        }).execute()
+        return new_conv.data[0]
+
+    def save_message(self, conversation_id: str, body: str, direction: str) -> dict:
+        """
+        Inserts a message into the messages table.
+        direction: 'outbound' = sent by the patient, 'inbound' = sent by the agent (received by patient).
+        """
+        new_msg = self.supabase.table("messages").insert({
+            "conversation_id": conversation_id,
+            "body": body,
+            "direction": direction,
+            "status": "sent",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+        return new_msg.data[0]
+
+    def update_conversation(self, conversation_id: str, last_message: str, increment_unread: bool = False) -> dict:
+        """
+        Updates the conversation's last_message, last_message_time and updated_at.
+        Pass increment_unread=True when the new message comes from the patient (outbound).
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        data = {
+            "last_message": (last_message or "")[:500],
+            "last_message_time": now,
+            "updated_at": now,
+        }
+
+        if increment_unread:
+            current = self.supabase.table("conversations") \
+                .select("unread_count") \
+                .eq("id", conversation_id) \
+                .single() \
+                .execute()
+            data["unread_count"] = (current.data.get("unread_count") or 0) + 1
+
+        response = self.supabase.table("conversations") \
+            .update(data) \
+            .eq("id", conversation_id) \
+            .execute()
+        return response.data[0] if response.data else None
 
     def get_clinic_catalog(self, clinic_id: str):
         """

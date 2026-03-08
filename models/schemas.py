@@ -62,7 +62,6 @@ class DoctorSchedule(Base):
     # Relaciones
     doctor = relationship("Doctor", back_populates="schedules")
 
-
 class Appointment(Base):
     __tablename__ = 'appointments'
     

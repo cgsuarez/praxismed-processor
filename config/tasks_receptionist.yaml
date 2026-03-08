@@ -1,49 +1,234 @@
-#capture_patient_data_task:
-#  description: >
-#    Interactúa con el paciente para obtener su nombre completo y correo electrónico. 
-#    Explica que es necesario para completar su registro en el sistema.
-#    Teléfono actual del paciente: {patient_phone}.
-#    Tu objetivo es registrar a un nuevo paciente. 
-#    1. Saluda al usuario.
-#    2. Pregunta su nombre completo, teléfono y correo electrónico.
-#    3. Si el usuario no proporciona un dato, PÍDELO. NO inventes datos.
-#    4. Usa la capacidad de 'human_input' para obtener estas respuestas.
-#  expected_output: >
-#    Un objeto JSON con las claves: 'full_name' y 'email'. 
-#    Si el paciente aún no proporciona los datos, el output debe indicar qué falta, 
-#    Debe retornarse un JSON con el campo 'missing_fields'.
+tarea_gestionar_cita_existente:
+  description: >
+    El paciente ya tiene una cita confirmada y necesita gestionarla.
+
+    DATOS INTERNOS DEL SISTEMA (NUNCA mencionarlos al paciente ni pedirlos):
+    - ID de la Cita: {appointment_id}
+
+    Información de la cita actual: {appointment_info}
+    Historial: {chat_history}
+    Último mensaje del paciente: "{message}"
+
+    TU MISIÓN:
+    Determina qué quiere hacer el paciente con su cita existente y actúa en consecuencia.
+
+    CASO A — El paciente quiere CANCELAR la cita
+    (palabras clave: "cancelar", "borrar", "quitar", "no quiero la cita", "eliminar cita"):
+      - Llama a la herramienta 'cancelar_cita' con el appointment_id: {appointment_id}.
+      - Retorna: {"action": "cancelled", "message": "Su cita ha sido cancelada exitosamente. Si necesita agendar una nueva cita en el futuro, con gusto le ayudo."}
+
+    CASO B — El paciente quiere CAMBIAR EL HORARIO / REAGENDAR
+    (palabras clave: "cambiar", "reagendar", "otro horario", "mover la cita", "reprogramar"):
+      - Llama a la herramienta 'cancelar_cita' con el appointment_id: {appointment_id} para liberar el espacio.
+      - Retorna: {"action": "reschedule", "message": "He cancelado su cita anterior. Por favor indíqueme la especialidad o el doctor con quien desea agendar la nueva cita."}
+
+    CASO C — El paciente NO ha indicado claramente qué desea hacer:
+      - NO llames ninguna herramienta.
+      - Retorna: {"action": "pending", "message": "Tiene una cita agendada: {appointment_info}. ¿Desea cancelarla o cambiar el horario?"}
+
+    REGLA CRÍTICA: NUNCA menciones el ID de la cita ni ningún UUID al paciente.
+  expected_output: >
+    Un objeto JSON válido (todas las claves entre comillas dobles) con exactamente estos campos:
+    "action": "cancelled" | "reschedule" | "pending"
+    "message": mensaje amable para el paciente.
+    Ejemplo cancelación: {"action": "cancelled", "message": "Su cita ha sido cancelada exitosamente."}
+    Ejemplo reagendar:   {"action": "reschedule", "message": "He cancelado su cita anterior. Por favor indíqueme la especialidad."}
+    Ejemplo pendiente:   {"action": "pending", "message": "Tiene una cita agendada: Dr. García el 2026-03-02 a las 09:00. ¿Desea cancelarla o cambiar el horario?"}
+  agent: receptionist_agent
 
 tarea_triaje_y_recepcion:
   description: >
-    Pedir al paciente {patient_name} que describa sus síntomas o motivo de consulta.
-    Identificar:  1. Motivo de consulta, 2. Nivel de urgencia.
-    Si es una emergencia, dar instrucciones de seguridad. Si es una cita normal, 
-    preparar el resumen para el coordinador.
+    Analiza el {chat_history} y el último mensaje: "{message}".
+    DATO INTERNO DEL SISTEMA — ID del Paciente: {patient_id}. Este identificador es
+    gestionado automáticamente por el sistema. NUNCA lo solicites al paciente ni lo
+    menciones en tus respuestas.
+    TU MISIÓN:
+    1. Si el paciente NO ha explicado sus síntomas o especialidad, ignora las demás tareas y
+       responde amablemente solicitando esta información.
+    2. Solo si tienes: Motivo, Especialidad y Doctor elegido, genera el resumen.
   expected_output: >
-    Un objecto JSON con nombre, motivo, especialidad requerida y nivel de urgencia.
+    Un objeto JSON válido con todas las claves entre comillas dobles. Dos posibles formatos:
+    Si falta información: {"missing_information": "descripción de lo que falta", "message": "Texto amable para el paciente."}
+    Si está completo: {"nombre": "...", "motivo": "...", "especialidad": "...", "urgencia": "baja|media|alta"}
   agent: receptionist_agent
 
 tarea_encontrar_agenda_doctor:
   description: >
-    Basado en el resumen de la tarea anterior
-    1. En base al nombre del doctor usa 'buscar_doctor_por_nombre_o_especialidad', pasando como
-    parametro el identificaodr de la clinica (NUNCA el nombre)
-    2. Una vez que encuentres el Id del doctor correcto usa 'consultar_agenda_doctor' pasando como parametro
-    el identificador del doctor   
+    DATOS INTERNOS DEL SISTEMA (NUNCA mencionarlos al paciente):
+    - ID del Paciente: {patient_id} — incluir en el JSON de salida.
+    - ID de la Clínica: {clinic_id} — usar como parámetro en las herramientas.
+
+    Revisa el historial: {chat_history} y el último mensaje: "{message}".
+
+    PASO 1 — Buscar doctores:
+    Usa 'buscar_doctor_por_nombre_o_especialidad' con el clinic_id {clinic_id} (NUNCA el nombre).
+    La herramienta retorna una lista con todos los doctores que coinciden.
+
+    CASO A — Se encontró MÁS DE UN doctor Y el paciente aún NO ha elegido uno específico
+    (es decir, no hay preferencia de doctor en el historial ni en el mensaje actual):
+      - NO consultes la agenda todavía.
+      - Construye "doctores_disponibles" con los datos de la herramienta:
+        [{"doctor_id": "uuid", "doctor_name": "Dr. X", "especialidad": "Y"}, ...]
+      - Construye "opciones" para la UI:
+        [{"label": "Dr. X - Especialidad Y", "value": "uuid-doctor"}, ...]
+      - Redacta un response_message amable listando los doctores por NOMBRE (sin IDs) y
+        preguntando cuál prefiere.
+      - Retorna con missing_information: "pending_doctor_selection".
+
+    CASO B — Se encontró exactamente UN doctor, O el paciente ya indicó su preferencia en el
+    historial o en el mensaje actual:
+      - Identifica el doctor_id correcto.
+      - Llama a 'consultar_agenda_doctor' con ese doctor_id.
+      - La herramienta retorna: {"agenda_disponible": {...}, "dias_disponibles": [...], "opciones": [...]}
+      - Si no hay horarios disponibles, informa amablemente y retorna con missing_information: "pending_doctor_selection".
+      - Si hay horarios, redacta un response_message usando EXCLUSIVAMENTE los campos "etiqueta" y
+        "slots" de "dias_disponibles". NUNCA derives nombres de días de fechas ISO.
+      - Copia el campo "opciones" de la herramienta SIN modificarlo.
+      - Retorna con missing_information: "pending_time_selection".
+
+    CASO C — No se encontró ningún doctor:
+      - Informa amablemente que no hay doctores disponibles para esa especialidad.
+      - Retorna con missing_information: "pending_doctor_selection".
+
+    REGLA CRÍTICA: El response_message solo debe contener nombres de doctores y horarios legibles.
+    NUNCA incluyas IDs, UUIDs ni códigos técnicos en el texto que verá el paciente.
   expected_output: >
-    Un objecto JSON estrictamente formateado con el doctor_id (basado en el id del doctor),
-    doctor_name con el nombre del doctor, y un objeto llamado agenda_disponible con la agenda
-    disponible del doctor o un mensaje indicando que no hay cupos cercanos.
+    Un objeto JSON válido con todas las claves entre comillas dobles.
+    Ejemplo CASO A (múltiples doctores):
+    {"doctor_id": null, "doctor_name": null, "patient_id": "{patient_id}",
+     "agenda_disponible": null, "dias_disponibles": null,
+     "doctores_disponibles": [{"doctor_id": "uuid-1", "doctor_name": "Dr. García", "especialidad": "Cardiología"}, {"doctor_id": "uuid-2", "doctor_name": "Dr. Pérez", "especialidad": "Cardiología"}],
+     "opciones": [{"label": "Dr. García - Cardiología", "value": "uuid-1"}, {"label": "Dr. Pérez - Cardiología", "value": "uuid-2"}],
+     "missing_information": "pending_doctor_selection",
+     "response_message": "Tenemos dos cardiólogos disponibles: Dr. García y Dr. Pérez. ¿Con cuál prefiere su cita?"}
+    Ejemplo CASO B (doctor ya seleccionado):
+    {"doctor_id": "uuid-doctor", "doctor_name": "Dr. García", "patient_id": "{patient_id}",
+     "agenda_disponible": {"2026-03-02": ["08:00", "08:30"]},
+     "dias_disponibles": [{"fecha": "2026-03-02", "etiqueta": "lunes 2 de marzo", "slots": ["08:00", "08:30"]}],
+     "doctores_disponibles": null,
+     "opciones": [{"label": "lunes 2 de marzo - 08:00", "value": "2026-03-02 08:00"}],
+     "missing_information": "pending_time_selection",
+     "response_message": "El Dr. García tiene disponibilidad el lunes 2 de marzo a las 08:00 y 08:30. ¿Qué horario prefiere?"}
   agent: receptionist_agent
 
 tarea_gestion_agenda:
   description: >
-    Basado en el resumen de la tarea anterior, buscar disponibilidad en el calendario 
-    para la especialidad requerida, tomar en cuenta que las citas del Doctor deben estar con una fecha futura,
-    es decir el dia tiene que ser al menos el dia de HOY, NUNCA UNA FECHA PASADA. Optimizar el tiempo del doctor.
-  expected_output: >    
-    Un JSON estrictamente formateado con doctor_id (el doctor_id es una cadena la misma que debe 
-    respetar el formato), patient_id (asi mismo es una cadena y se debe respetar el formato), date y un summary con 
-    la mejor opción de horario disponible (Fecha y Hora) o un mensaje indicando que no 
-    hay cupos cercanos.
+    Revisa el historial de conversación: {chat_history} y el último mensaje del paciente: "{message}".
+
+    FECHA ACTUAL DEL SISTEMA: {current_date}
+    Usa esta fecha como referencia absoluta para resolver cualquier expresión relativa de tiempo.
+    REGLA CRÍTICA DE CALENDARIO: "mañana" significa el día SIGUIENTE en el calendario,
+    sin importar si es sábado, domingo o feriado. NO uses "día hábil" ni "día laborable".
+    Ejemplos de resolución obligatoria (asumiendo que hoy es {current_date}):
+      - "mañana"        → {current_date} + 1 día calendario exacto
+      - "pasado mañana" → {current_date} + 2 días calendario exactos
+      - "el lunes"      → el próximo lunes desde {current_date}
+      - "el sábado"     → el próximo sábado desde {current_date}
+    NUNCA uses una fecha distinta a la calculada desde {current_date}. Está PROHIBIDO asumir
+    o inventar una fecha; si tienes dudas usa CASO B.
+
+    DATOS INTERNOS DEL SISTEMA (NUNCA pedirlos al paciente ni mencionarlos):
+    - ID del Paciente: {patient_id}
+    - ID de la Clínica: {clinic_id}
+    - Todos los demás campos vienen del JSON de la tarea anterior.
+
+    CASO PREVIO — Si la tarea anterior tiene missing_information: "pending_doctor_selection":
+      El paciente todavía no eligió doctor. NO intentes capturar un horario.
+      Propaga todos los campos de la tarea anterior sin modificar (doctor_id, doctor_name,
+      agenda_disponible, dias_disponibles, doctores_disponibles, opciones, response_message)
+      y retorna con missing_information: "pending_doctor_selection".
+
+    PARA EL CASO NORMAL (missing_information: "pending_time_selection" en la tarea anterior):
+    - "agenda_disponible": {"YYYY-MM-DD": ["HH:MM", ...]} — úsalo para validar el slot exacto.
+    - "dias_disponibles": [{"fecha", "etiqueta", "slots"}] — úsalo para redactar mensajes.
+    - "doctores_disponibles": propaga el valor de la tarea anterior sin modificar.
+    - "opciones": propaga desde la tarea anterior (slots de tiempo) o limpia a null si el
+      horario ya fue confirmado.
+
+    TU MISIÓN:
+    Determinar si el paciente ya seleccionó un horario específico de la agenda presentada.
+
+    CASO A — El paciente SÍ indicó un horario:
+      1. Resuelve la fecha relativa usando {current_date} como base (ver ejemplos arriba).
+         Recuerda: "mañana" = {current_date} + 1 día calendario, NO el siguiente día hábil.
+      2. Busca exactamente esa fecha y hora dentro de agenda_disponible de la tarea anterior.
+         PROHIBIDO sustituir silenciosamente por otra fecha más cercana o más lejana.
+         Si el slot solicitado NO está disponible en agenda_disponible:
+           - Usa CASO B, informa al paciente que ese horario específico no está disponible
+             y muestra las opciones reales de agenda_disponible para que elija.
+      3. Solo si la fecha Y la hora solicitadas están confirmadas en agenda_disponible:
+         - Extrae doctor_id y patient_id del JSON de la tarea anterior.
+         - Usa clinic_id del dato interno del sistema.
+         - Formatea la fecha seleccionada como YYYY-MM-DD HH:MM.
+         - Retorna el JSON completo con todos los campos llenos.
+
+    CASO B — El paciente NO ha seleccionado un horario válido todavía:
+      - Retorna el JSON con "missing_information": "pending_time_selection" y un "response_message"
+        amable mostrando los horarios reales disponibles de agenda_disponible para que el paciente elija.
+      - NUNCA inventes ni asumas un horario. NUNCA uses una fecha que no venga de agenda_disponible.
+
+    FORMATO OBLIGATORIO: Tu respuesta final DEBE ser un objeto JSON válido con todas las
+    claves entre comillas dobles. Los campos "opciones" y "doctores_disponibles" deben copiarse
+    EXACTAMENTE del JSON de la tarea anterior sin modificarlos.
+    Ejemplos de formato correcto:
+    Horario confirmado:
+    {"doctor_id": "uuid", "patient_id": "uuid", "clinic_id": "uuid", "date": "2026-02-28 08:30", "summary": "Cita con Dr. X", "missing_information": null, "response_message": null, "doctores_disponibles": null, "opciones": null}
+    Pendiente de horario:
+    {"doctor_id": "uuid", "patient_id": "uuid", "clinic_id": "uuid", "date": null, "summary": "Pendiente", "missing_information": "pending_time_selection", "response_message": "Por favor elija un horario.", "doctores_disponibles": null, "opciones": [{"label": "lunes 2 de marzo - 08:00", "value": "2026-03-02 08:00"}]}
+    Pendiente de doctor:
+    {"doctor_id": null, "patient_id": "uuid", "clinic_id": "uuid", "date": null, "summary": "Pendiente", "missing_information": "pending_doctor_selection", "response_message": "¿Con cuál doctor prefiere?", "doctores_disponibles": [{"doctor_id": "uuid-1", "doctor_name": "Dr. García", "especialidad": "Cardiología"}], "opciones": [{"label": "Dr. García - Cardiología", "value": "uuid-1"}]}
+  expected_output: >
+    Un objeto JSON válido (todas las claves entre comillas dobles) con exactamente estos campos:
+    "doctor_id": UUID del doctor o null.
+    "patient_id": UUID del paciente o null.
+    "clinic_id": UUID de la clínica o null.
+    "date": Fecha y hora "YYYY-MM-DD HH:MM" o null.
+    "summary": resumen o descripción del estado actual.
+    "missing_information": "pending_doctor_selection" | "pending_time_selection" | null.
+    "response_message": mensaje amable para el paciente cuando missing_information está presente, null si no.
+    "doctores_disponibles": lista de doctores [{doctor_id, doctor_name, especialidad}] o null.
+    "opciones": lista [{label, value}] para UI interactiva o null.
   agent: coordinador_agenda
+
+task_registrar_cita_final:
+  description: >
+    Recibes el JSON de la tarea anterior con la siguiente estructura:
+    - clinic_id: UUID de la clínica
+    - doctor_id: UUID del doctor
+    - patient_id: UUID del paciente
+    - date: Fecha y hora en formato "YYYY-MM-DD HH:MM"
+    - summary: resumen de la selección
+    - missing_information: presente si el paciente aún no eligió horario
+    - response_message: mensaje para el paciente si missing_information está presente
+
+    Tu deber es:
+    1. Si el campo missing_information está presente y no es null ("pending_doctor_selection" o
+       "pending_time_selection"): retorna inmediatamente sin ejecutar ninguna herramienta,
+       propagando response_message, doctores_disponibles y opciones de la tarea anterior.
+    2. Si clinic_id, doctor_id o patient_id son null, vacíos o no son cadenas de texto:
+       retorna un JSON de error sin preguntar al paciente por esos datos.
+    3. Si todos los campos están completos:
+       - Separa date en fecha (YYYY-MM-DD) y hora (HH:MM).
+       - Ejecuta la herramienta 'confirmar_y_agendar_cita' pasando: clinic_id, patient_id,
+         doctor_id, la fecha y la hora por separado.
+    4. Si la herramienta responde exitosamente, confirma al paciente con un mensaje amable
+       indicando nombre del doctor, fecha y hora de la cita.
+    5. Si hay un error en la herramienta (ej. horario ocupado), infórmalo amablemente.
+
+    REGLA CRÍTICA: NUNCA pidas al paciente IDs, UUIDs ni ningún dato técnico interno.
+
+    FORMATO OBLIGATORIO: JSON válido con todas las claves entre comillas dobles.
+    Los campos "opciones" y "doctores_disponibles" se copian EXACTAMENTE de la tarea anterior
+    cuando missing_information está presente; se ponen en null cuando la cita fue registrada.
+    Ejemplos:
+    Pendiente de doctor:  {"result": false, "missing_information": "pending_doctor_selection", "message": "¿Con cuál doctor prefiere?", "doctores_disponibles": [...], "opciones": [...]}
+    Pendiente de horario: {"result": false, "missing_information": "pending_time_selection", "message": "Por favor elija un horario.", "doctores_disponibles": null, "opciones": [...]}
+    Cita agendada:        {"result": true, "missing_information": null, "message": "Su cita ha sido agendada.", "doctores_disponibles": null, "opciones": null}
+  expected_output: >
+    Un objeto JSON válido (todas las claves entre comillas dobles) con exactamente estos campos:
+    "result": true si la cita fue registrada exitosamente, false en caso contrario.
+    "message": mensaje final amable para el paciente.
+    "missing_information": "pending_doctor_selection" | "pending_time_selection" | null.
+    "doctores_disponibles": lista de doctores propagada de la tarea anterior, o null.
+    "opciones": lista [{label, value}] propagada de la tarea anterior, o null.
+  agent: scheduling_agent

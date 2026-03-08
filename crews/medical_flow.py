@@ -5,8 +5,7 @@ from crewai.flow.flow import Flow, start, router, listen
 from pydantic import BaseModel, ConfigDict
 from database.repository import MedicalRepository
 from crews.onboarding_crew import OnboardingCrew 
-from crews.scheduler_crew import SchedulerCrew
-from crews.receptionist_crew import ReceptionistCrew
+from crews.receptionist_crew import ReceptionistCrew, ExistingAppointmentCrew
 from database.redis_manager import RedisManager
 from typing import Optional, Any
 from fastapi.encoders import jsonable_encoder
@@ -33,12 +32,12 @@ class AppointmentState(BaseModel):
     appointment_details: str = ""
     clinic_details: Optional[Any] = None
     message: str = ""
-    clinic_id: str = "" 
+    clinic_id: str = ""
     current_step: str = ""
     history: list = []
     metadata: dict = {}
-    message: str = ""
     available_catalog: str = ""
+    pending_response: Optional[Any] = None  # Set when a step needs to return early with a response
 
 class MedicalBookingFlow(Flow[AppointmentState]):
 
@@ -137,9 +136,13 @@ class MedicalBookingFlow(Flow[AppointmentState]):
             return "go_booking"
         
         if status in ["SCHEDULING"]:
-            print("*** Realizar calendarization")
-            return "go_schedule"
-        
+            print("*** Retomar flujo de agendamiento con selección del usuario")
+            return "go_booking"
+
+        if status in ["EXISTING_APPOINTMENT"]:
+            print("*** Paciente tiene cita existente, gestionando acción")
+            return "go_existing_appointment"
+
         if status in ["COMPLETED"]:
             return "finish_flow"
             
@@ -186,9 +189,6 @@ class MedicalBookingFlow(Flow[AppointmentState]):
 
             print(f"json_result Result Type: {type(json_result)}")
             
-
-            
-
             
             patient_data = {}
 
@@ -201,19 +201,20 @@ class MedicalBookingFlow(Flow[AppointmentState]):
                 next_step = "ONBOARDING"
             else:
                 print("******* 3")                
-                # se graba los datos del paciente                
+                # se graba los datos del paciente
                 repo = MedicalRepository()
 
-                repo.create_patient(self.clinic_id,
-                                    json_result.get("full_name"), 
+                created_patient = repo.create_patient(self.clinic_id,
+                                    json_result.get("full_name"),
                                     self.state.patient_phone,
                                     json_result.get("email"))
-                
+
 
                 next_step = "BOOKING_SPECIALTY"
                 patient_data = {
-                    "full_name": json_result.get("full_name"),
-                    "email": json_result.get("email")
+                    "id": created_patient.get("id"),
+                    "full_name": created_patient.get("full_name"),
+                    "email": created_patient.get("email")
                 }
                 print(f"Datos del paciente registrados: {patient_data}")
 
@@ -235,13 +236,43 @@ class MedicalBookingFlow(Flow[AppointmentState]):
     
     @listen("go_booking")
     def go_booking_method(self):
-        # 3. Decidir qué Crew usar según el paso guardado en Redis
-        
-        clinic_details = self.state.clinic_details        
-        print(f"Iniciando Receptionist Crew para clínica: {clinic_details['name']}")
+        clinic_details = self.state.clinic_details
+        print(f"Iniciando Receptionist Crew para clínica: {clinic_details['name']} current step: {self.state.current_step}")
         next_step = self.state.current_step
         metadata = self.state.metadata
-        if self.state.current_step in ["BOOKING_SPECIALTY", "BOOKING_DATE", "BOOKING_HOUR"]:
+
+        # Pre-check: if patient enters the booking flow for the first time in this session,
+        # verify whether they already have a confirmed appointment.
+        if self.state.current_step in ["BOOKING_SPECIALTY"]:
+            session = self.redis.get_session(self.state.patient_phone)
+            patient_data = session.get("patient_data") or {}
+            patient_id = patient_data.get("id")
+            if patient_id:
+                repo = MedicalRepository()
+                existing = repo.get_confirmed_appointment(self.clinic_id, patient_id)
+                print(f"Existing: {existing}")
+                if existing:
+                    doctor_info = existing.get("doctors") or {}
+                    doctor_name = doctor_info.get("name", "el doctor")
+                    fecha = existing.get("appointment_date", "")
+                    hora = existing.get("start_time", "")
+                    appointment_info = f"Dr. {doctor_name} el {fecha} a las {hora}"
+                    print(f"*** Cita existente encontrada: {appointment_info}")
+                    session["current_step"] = "EXISTING_APPOINTMENT"
+                    session["metadata"]["existing_appointment_id"] = existing["id"]
+                    session["metadata"]["existing_appointment_info"] = appointment_info
+                    self.redis.save_session(self.state.patient_phone, session)
+                    self.state.pending_response = {
+                        "message": f"Usted ya tiene una cita agendada con {appointment_info}. ¿Desea cancelarla o cambiar el horario?",
+                        "opciones": [
+                            {"label": "Cancelar cita", "value": "cancel"},
+                            {"label": "Cambiar horario", "value": "reschedule"}
+                        ],
+                        "missing_information": "existing_appointment_action"
+                    }
+                    return self.state.pending_response
+
+        if self.state.current_step in ["BOOKING_SPECIALTY", "BOOKING_DATE", "BOOKING_HOUR", "SCHEDULING"]:
             print(f"***** bookindg 1 {self.state.metadata}")
             chat_history = self.state.metadata.get("chat_history", "No hay mensajes previos.")
             print("***** bookindg 1.1")
@@ -253,15 +284,17 @@ class MedicalBookingFlow(Flow[AppointmentState]):
             result = ReceptionistCrew(
                 clinic_id = clinic_details['id'],
                 clinic_name = clinic_details['name'], 
-                patient_name = patient_data.get("full_name", "Paciente")).receptionist_crew().kickoff(inputs={
+                patient_name = patient_data.get("full_name", "Paciente"),
+                patient_id = patient_data.get("id")).receptionist_crew().kickoff(inputs={
                 "message": self.state.message,
-                "history": self.state.history,      
+                "history": self.state.history,                  
                 "clinic_id": self.clinic_id,          
                 "clinic_name": clinic_details['name'],
+                "patient_id": patient_data.get("id"),
                 "patient_phone": self.state.patient_phone,
                 "patient_name": patient_data.get("full_name", "Paciente"),  
                 "catalog": self.state.available_catalog,
-                "current_date": date.today().isoformat(),
+                "current_date": date.today().isoformat(),                
                 "chat_history": self.state.metadata.get("chat_history", [])                
             })
 
@@ -274,14 +307,19 @@ class MedicalBookingFlow(Flow[AppointmentState]):
 
             
             data = result.to_dict() 
+
+            if data.get("missing_information"):
+                next_step = "SCHEDULING"
             
             # 3. Lógica de Reconocimiento: ¿Están los campos obligatorios?
-            if data.get('doctor_id') and data.get('patient_id') and data.get('date'):
-                print("✅ Datos completos encontrados. Cambiando a estado CALENDARIZACIÓN.")                
-                metadata['doctor_id'] = data.get('doctor_id')                
-                metadata['patient_id'] = data.get('patient_id')                
-                metadata['date'] = data.get('date')                                
-                next_step = "SCHEDULING"
+            elif data.get('result') and data.get('message'):
+                next_step = "COMPLETED"
+            #if data.get('doctor_id') and data.get('patient_id') and data.get('date'):
+            #    print("✅ Datos completos encontrados. Cambiando a estado CALENDARIZACIÓN.")                
+            #    metadata['doctor_id'] = data.get('doctor_id')                
+            #    metadata['patient_id'] = data.get('patient_id')                
+            #    metadata['date'] = data.get('date')                                
+            #    next_step = "SCHEDULING"
 
             json_result = result.raw if isinstance(result.raw, str) else json.loads(result.raw)
             ## 4. Actualizar Redis con la respuesta del Agente
@@ -305,55 +343,63 @@ class MedicalBookingFlow(Flow[AppointmentState]):
 
             self.redis.save_session(self.state.patient_phone, session)
         
-        print("booking completed.")        
+        print("booking completed.")
         return result
-#
 
-
-    @listen("go_schedule")
-    def go_schedule_method(self):
-        
-        # Recuperamos los IDs que guardamos en pasos anteriores en el estado
-        d_id = self.state.metadata.get("doctor_id")
-        c_id = self.state.clinic_id
-        p_id = self.state.patient_data['id']
-        date = self.state.metadata.get("date")
-        summary = self.state.metadata.get("summary")
-
-        
-        print(f"p_id: {p_id} doctorid: {d_id} date: {date}")
-        result = SchedulerCrew(
-                doctor_id = d_id,
-                patient_id = p_id,
-                date = date,
-                summary = summary
-               ).scheduler_crew().kickoff(inputs={
-                "clinic_id": c_id,
-                "doctor_id": d_id,
-                "patient_id": p_id,                
-                "date": date,
-                "summary": summary
-            })
-        json_result = result.raw if isinstance(result.raw, str) else json.loads(result.raw)
-        # --- AQUÍ ESTÁ LA SOLUCIÓN ---
-        # 3. Actualizar el estado en Redis para romper el bucle
-        print("✅ Agendamiento finalizado. Reseteando estado a START.")
-        
+    @listen("go_existing_appointment")
+    def go_existing_appointment_method(self):
+        clinic_details = self.state.clinic_details
         session = self.redis.get_session(self.state.patient_phone)
-        if session:
-            print("Ingreso completado")
-            session["current_step"] = "COMPLETED"  # O "COMPLETED"
-            # Limpiamos la metadata temporal de la cita para la próxima vez
-            session["metadata"].pop("doctor_id", None)
-            session["metadata"].pop("date", None)
-            session["metadata"]["message"] = json_result
-            self.state.message = json_result
-            self.redis.save_session(self.state.patient_phone, session)
+        metadata = session.get("metadata", {})
+        patient_data = session.get("patient_data") or {}
+        appointment_id = metadata.get("existing_appointment_id")
+        appointment_info = metadata.get("existing_appointment_info", "su cita agendada")
 
-        
-        # Actualizamos el estado local del Flow
-        self.state.current_step = "COMPLETED"
-        print("--- FIN DEL METODO GO_SCHEDULE ---")
+        print(f"*** Gestionando cita existente {appointment_id} para {self.state.patient_phone}")
+
+        result = ExistingAppointmentCrew(
+            clinic_id=clinic_details["id"],
+            clinic_name=clinic_details["name"],
+            patient_name=patient_data.get("full_name", "Paciente"),
+            appointment_id=appointment_id,
+            appointment_info=appointment_info,
+        ).existing_appointment_crew().kickoff(inputs={
+            "message": self.state.message,
+            "chat_history": metadata.get("chat_history", []),
+            "appointment_id": appointment_id,
+            "clinic_name": clinic_details["name"],
+            "appointment_info": appointment_info,
+            "patient_name": patient_data.get("full_name", "Paciente"),
+            "patient_id": patient_data.get("id"),
+            "catalog": self.state.available_catalog,
+            "current_date": date.today().isoformat(),                
+            "chat_history": self.state.metadata.get("chat_history", [])                
+        })
+
+        print(f"ExistingAppointmentCrew result: {result}")
+        data = result.to_dict()
+        action = data.get("action", "pending")
+
+        chat_history = metadata.get("chat_history", "")
+        new_history = f"{chat_history}\nUsuario: {self.state.message}\nAsistente: {result.raw}"
+        session["metadata"]["chat_history"] = new_history
+
+        if action == "cancelled":
+            # Appointment cancelled — clean up and reset to START
+            session["current_step"] = "START"
+            session["metadata"].pop("existing_appointment_id", None)
+            session["metadata"].pop("existing_appointment_info", None)
+        elif action == "reschedule":
+            # Existing appointment cancelled by the crew — allow new booking
+            session["current_step"] = "BOOKING_SPECIALTY"
+            session["metadata"].pop("existing_appointment_id", None)
+            session["metadata"].pop("existing_appointment_info", None)
+        else:
+            # Still waiting for patient's decision
+            session["current_step"] = "EXISTING_APPOINTMENT"
+
+        self.redis.save_session(self.state.patient_phone, session)
+        print("go_existing_appointment completed.")
         return result
 
     @listen("finish_flow")

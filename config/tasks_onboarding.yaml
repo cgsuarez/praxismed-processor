@@ -11,30 +11,3 @@ capture_patient_data_task:
     'email': string o null,
     'missing_fields': lista de campos que faltan,
     'response_message': El mensaje que le enviaremos al usuario por WhatsApp.
-  #agent: patient_onboarding_agent
-
-#validate_registration_data_task:
-#  description: >
-#    Revisa la información proporcionada por el paciente. Asegúrate de que el nombre 
-#    parezca real y el correo electrónico tenga un formato válido.
-#  expected_output: >
-#    Un objeto JSON con las claves: 'full_name' y 'email'. 
-#    Si el paciente aún no proporciona los datos, el output debe indicar qué falta tambien en formato JSON con el campo 'missing_fields'.  
-#
-#tarea_gestion_agenda:
-#  description: >
-#    Basado en el resumen de la tarea anterior, buscar disponibilidad en el calendario 
-#    para la especialidad requerida. Optimizar el tiempo del doctor.
-#  expected_output: >
-#    La mejor opción de horario disponible (Fecha y Hora) o un mensaje indicando que no 
-#    hay cupos cercanos.
-#  agent: coordinador_agenda
-#
-#tarea_confirmacion_y_seguimiento:
-#  description: >
-#    Generar el mensaje final de WhatsApp para el paciente con la propuesta de cita. 
-#    Incluir instrucciones de llegada y un recordatorio de que debe confirmar.
-#  expected_output: >
-#    El texto exacto del mensaje de WhatsApp que se enviará al paciente, redactado de 
-#    forma profesional y cálida.
-#  agent: seguimiento_calidad
